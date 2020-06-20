@@ -1,0 +1,14 @@
+[package]
+name = "nbd-async"
+version = "0.1.0"
+authors = ["Olle Sandberg <olle@b3rg.se>"]
+description = "Block device drivers in userspace."
+edition = "2018"
+categories = ["filesystem", "asynchronous", "os", "network-programming"]
+
+[dependencies]
+async-trait = "0.1"
+byteorder = "1.3"
+futures = "0.3"
+nix = "0.17"
+tokio = { version = "0.2", features = ["fs", "uds"] }
