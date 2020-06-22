@@ -16,3 +16,6 @@ byteorder = "1.3"
 futures = "0.3"
 nix = "0.17"
 tokio = { version = "0.2", features = ["fs", "uds"] }
+
+[dev-dependencies]
+tokio = { version = "0.2", features = ["fs", "uds", "macros"] }
