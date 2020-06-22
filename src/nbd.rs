@@ -5,29 +5,29 @@ use std::io::Cursor;
 use std::io::{Error, ErrorKind};
 use std::os::unix::io::{AsRawFd, RawFd};
 
-static CMD_MASK_COMMAND: u32 = 0x0000_ffff;
-static REQUEST_MAGIC: u32 = 0x2560_9513;
-static REPLY_MAGIC: u32 = 0x6744_6698;
+const CMD_MASK_COMMAND: u32 = 0x0000_ffff;
+const REQUEST_MAGIC: u32 = 0x2560_9513;
+const REPLY_MAGIC: u32 = 0x6744_6698;
 
-pub static SIZE_OF_REQUEST: usize = 28;
-pub static SIZE_OF_REPLY: usize = 16;
+pub const SIZE_OF_REQUEST: usize = 28;
+pub const SIZE_OF_REPLY: usize = 16;
 
 // Flags are there
-static HAS_FLAGS: u64 = 1;
+const HAS_FLAGS: u64 = 1;
 // Device is read-only
-static READ_ONLY: u64 = 1 << 1;
+const READ_ONLY: u64 = 1 << 1;
 // Send FLUSH
-static SEND_FLUSH: u64 = 1 << 2;
+const SEND_FLUSH: u64 = 1 << 2;
 // Send FUA (Force Unit Access)
-static SEND_FUA: u64 = 1 << 3;
+const SEND_FUA: u64 = 1 << 3;
 // Use elevator algorithm - rotational media
-static ROTATIONAL: u64 = 1 << 4;
+const ROTATIONAL: u64 = 1 << 4;
 // Send TRIM (discard)
-static SEND_TRIM: u64 = 1 << 5;
+const SEND_TRIM: u64 = 1 << 5;
 // Send NBD_CMD_WRITE_ZEROES
-static SEND_WRITE_ZEROES: u64 = 1 << 6;
+const SEND_WRITE_ZEROES: u64 = 1 << 6;
 // Multiple connections are okay
-static CAN_MULTI_CONN: u64 = 1 << 8;
+const CAN_MULTI_CONN: u64 = 1 << 8;
 
 pub fn set_sock<F>(f: &F, sock: RawFd) -> Result<i32, Error>
 where
@@ -141,7 +141,6 @@ impl Request {
         let handle = rdr.read_u64::<NetworkEndian>()?;
         let from = rdr.read_u64::<NetworkEndian>()?;
         let len = rdr.read_u32::<NetworkEndian>()? as usize;
-
         if magic != REQUEST_MAGIC {
             return Err(Error::new(ErrorKind::InvalidData, "invalid magic"));
         }
@@ -157,7 +156,6 @@ impl Request {
         let flags = type_f >> 16;
         let fua = flags & 1 == 1;
         let no_hole = flags & (1 << 1) == (1 << 1);
-
         Ok(Self {
             magic,
             command,
