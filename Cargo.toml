@@ -2,8 +2,12 @@
 name = "nbd-async"
 version = "0.1.0"
 authors = ["Olle Sandberg <olle@b3rg.se>"]
+license = "MIT"
+readme = "README.md"
 description = "Block device drivers in userspace."
+repository = "https://github.com/oll3/nbd-async"
 edition = "2018"
+keywords = ["nbd", "block-device", "userspace"]
 categories = ["filesystem", "asynchronous", "os", "network-programming"]
 
 [dependencies]
