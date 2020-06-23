@@ -8,15 +8,15 @@ use std::path::Path;
 use std::thread::JoinHandle;
 use tokio::{fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWriteExt, net::UnixStream};
 
-use crate::nbd;
+use crate::{nbd, sys};
 
 /// A block device.
 #[async_trait]
 pub trait BlockDevice {
     /// Read a block from offset.
-    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), io::Error>;
+    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
     /// Write a block of data at offset.
-    async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<(), io::Error>;
+    async fn write(&mut self, offset: u64, buf: &[u8]) -> io::Result<()>;
     /// Size of a block on device.
     fn block_size(&self) -> u32;
     /// Number of blocks on device.
@@ -25,13 +25,13 @@ pub trait BlockDevice {
 
 struct RequestStream {
     sock: Option<UnixStream>,
-    do_it_thread: Option<JoinHandle<Result<(), io::Error>>>,
+    do_it_thread: Option<JoinHandle<io::Result<()>>>,
     read_buf: [u8; nbd::SIZE_OF_REQUEST],
     file: tokio::fs::File,
 }
 
 /// Attach a block device to a NBD dev file.
-pub async fn attach_device<P, B>(path: P, mut block_device: B) -> Result<(), io::Error>
+pub async fn attach_device<P, B>(path: P, mut block_device: B) -> io::Result<()>
 where
     P: AsRef<Path>,
     B: Unpin + BlockDevice,
@@ -43,20 +43,20 @@ where
         .await?;
 
     let (sock, kernel_sock) = UnixStream::pair()?;
-    nbd::set_block_size(&file, block_device.block_size())?;
-    nbd::set_size_blocks(&file, block_device.block_count())?;
-    nbd::set_timeout(&file, 10)?;
-    nbd::clear_sock(&file)?;
+    sys::set_block_size(&file, block_device.block_size())?;
+    sys::set_size_blocks(&file, block_device.block_count())?;
+    sys::set_timeout(&file, 10)?;
+    sys::clear_sock(&file)?;
 
     let inner_file = file.try_clone().await?;
-    let do_it_thread = Some(std::thread::spawn(move || -> Result<(), io::Error> {
-        nbd::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
-        let _ = nbd::set_flags(&inner_file, 0);
+    let do_it_thread = Some(std::thread::spawn(move || -> io::Result<()> {
+        sys::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
+        let _ = sys::set_flags(&inner_file, 0);
         // The do_it ioctl will block until device is disconnected, hence
         // the separate thread.
-        nbd::do_it(&inner_file)?;
-        let _ = nbd::clear_sock(&inner_file);
-        let _ = nbd::clear_queue(&inner_file);
+        sys::do_it(&inner_file)?;
+        let _ = sys::clear_sock(&inner_file);
+        let _ = sys::clear_queue(&inner_file);
         Ok(())
     }));
 
@@ -114,7 +114,7 @@ where
 
 impl Drop for RequestStream {
     fn drop(&mut self) {
-        let _ = nbd::disconnect(&self.file);
+        let _ = sys::disconnect(&self.file);
         self.sock = None;
         if let Some(do_it_thread) = self.do_it_thread.take() {
             do_it_thread.join().expect("join thread").unwrap();
@@ -123,7 +123,7 @@ impl Drop for RequestStream {
 }
 
 impl RequestStream {
-    fn read_next(&mut self, cx: &mut Context) -> Poll<Option<Result<nbd::Request, io::Error>>> {
+    fn read_next(&mut self, cx: &mut Context) -> Poll<Option<io::Result<nbd::Request>>> {
         let sock = match self.sock {
             Some(ref mut sock) => sock,
             None => return Poll::Ready(None),
@@ -149,7 +149,7 @@ impl RequestStream {
 }
 
 impl Stream for RequestStream {
-    type Item = Result<nbd::Request, io::Error>;
+    type Item = io::Result<nbd::Request>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.read_next(cx)
     }
