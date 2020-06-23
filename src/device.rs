@@ -8,7 +8,7 @@ use std::path::Path;
 use std::thread::JoinHandle;
 use tokio::{fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWriteExt, net::UnixStream};
 
-use crate::nbd;
+use crate::{nbd, sys};
 
 /// A block device.
 #[async_trait]
@@ -43,20 +43,20 @@ where
         .await?;
 
     let (sock, kernel_sock) = UnixStream::pair()?;
-    nbd::set_block_size(&file, block_device.block_size())?;
-    nbd::set_size_blocks(&file, block_device.block_count())?;
-    nbd::set_timeout(&file, 10)?;
-    nbd::clear_sock(&file)?;
+    sys::set_block_size(&file, block_device.block_size())?;
+    sys::set_size_blocks(&file, block_device.block_count())?;
+    sys::set_timeout(&file, 10)?;
+    sys::clear_sock(&file)?;
 
     let inner_file = file.try_clone().await?;
     let do_it_thread = Some(std::thread::spawn(move || -> Result<(), io::Error> {
-        nbd::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
-        let _ = nbd::set_flags(&inner_file, 0);
+        sys::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
+        let _ = sys::set_flags(&inner_file, 0);
         // The do_it ioctl will block until device is disconnected, hence
         // the separate thread.
-        nbd::do_it(&inner_file)?;
-        let _ = nbd::clear_sock(&inner_file);
-        let _ = nbd::clear_queue(&inner_file);
+        sys::do_it(&inner_file)?;
+        let _ = sys::clear_sock(&inner_file);
+        let _ = sys::clear_queue(&inner_file);
         Ok(())
     }));
 
@@ -114,7 +114,7 @@ where
 
 impl Drop for RequestStream {
     fn drop(&mut self) {
-        let _ = nbd::disconnect(&self.file);
+        let _ = sys::disconnect(&self.file);
         self.sock = None;
         if let Some(do_it_thread) = self.do_it_thread.take() {
             do_it_thread.join().expect("join thread").unwrap();
