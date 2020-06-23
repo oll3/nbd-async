@@ -14,9 +14,9 @@ use crate::{nbd, sys};
 #[async_trait]
 pub trait BlockDevice {
     /// Read a block from offset.
-    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), io::Error>;
+    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
     /// Write a block of data at offset.
-    async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<(), io::Error>;
+    async fn write(&mut self, offset: u64, buf: &[u8]) -> io::Result<()>;
     /// Size of a block on device.
     fn block_size(&self) -> u32;
     /// Number of blocks on device.
@@ -25,13 +25,13 @@ pub trait BlockDevice {
 
 struct RequestStream {
     sock: Option<UnixStream>,
-    do_it_thread: Option<JoinHandle<Result<(), io::Error>>>,
+    do_it_thread: Option<JoinHandle<io::Result<()>>>,
     read_buf: [u8; nbd::SIZE_OF_REQUEST],
     file: tokio::fs::File,
 }
 
 /// Attach a block device to a NBD dev file.
-pub async fn attach_device<P, B>(path: P, mut block_device: B) -> Result<(), io::Error>
+pub async fn attach_device<P, B>(path: P, mut block_device: B) -> io::Result<()>
 where
     P: AsRef<Path>,
     B: Unpin + BlockDevice,
@@ -49,7 +49,7 @@ where
     sys::clear_sock(&file)?;
 
     let inner_file = file.try_clone().await?;
-    let do_it_thread = Some(std::thread::spawn(move || -> Result<(), io::Error> {
+    let do_it_thread = Some(std::thread::spawn(move || -> io::Result<()> {
         sys::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
         let _ = sys::set_flags(&inner_file, 0);
         // The do_it ioctl will block until device is disconnected, hence
@@ -123,7 +123,7 @@ impl Drop for RequestStream {
 }
 
 impl RequestStream {
-    fn read_next(&mut self, cx: &mut Context) -> Poll<Option<Result<nbd::Request, io::Error>>> {
+    fn read_next(&mut self, cx: &mut Context) -> Poll<Option<io::Result<nbd::Request>>> {
         let sock = match self.sock {
             Some(ref mut sock) => sock,
             None => return Poll::Ready(None),
@@ -149,7 +149,7 @@ impl RequestStream {
 }
 
 impl Stream for RequestStream {
-    type Item = Result<nbd::Request, io::Error>;
+    type Item = io::Result<nbd::Request>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.read_next(cx)
     }
