@@ -1,6 +1,5 @@
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use std::io::Cursor;
-use std::io::{Error, ErrorKind};
+use std::io::{self, Cursor};
 
 pub const CMD_MASK_COMMAND: u32 = 0x0000_ffff;
 pub const REQUEST_MAGIC: u32 = 0x2560_9513;
@@ -37,7 +36,7 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn try_from_bytes(d: &[u8]) -> Result<Self, Error> {
+    pub fn try_from_bytes(d: &[u8]) -> io::Result<Self> {
         let mut rdr = Cursor::new(d);
         let magic = rdr.read_u32::<NetworkEndian>()?;
         let type_f = rdr.read_u32::<NetworkEndian>()?;
@@ -45,7 +44,7 @@ impl Request {
         let from = rdr.read_u64::<NetworkEndian>()?;
         let len = rdr.read_u32::<NetworkEndian>()? as usize;
         if magic != REQUEST_MAGIC {
-            return Err(Error::new(ErrorKind::InvalidData, "invalid magic"));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid magic"));
         }
         let command = match type_f & CMD_MASK_COMMAND {
             0 => Command::Read,
@@ -54,7 +53,7 @@ impl Request {
             3 => Command::Flush,
             4 => Command::Trim,
             5 => Command::WriteZeroes,
-            _ => return Err(Error::new(ErrorKind::InvalidData, "invalid command")),
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid command")),
         };
         let flags = type_f >> 16;
         let fua = flags & 1 == 1;
@@ -85,13 +84,13 @@ impl Reply {
             error: 0,
         }
     }
-    pub fn append_to_vec(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn append_to_vec(&self, buf: &mut Vec<u8>) -> io::Result<()> {
         buf.write_u32::<NetworkEndian>(self.magic)?;
         buf.write_i32::<NetworkEndian>(self.error)?;
         buf.write_u64::<NetworkEndian>(self.handle)?;
         Ok(())
     }
-    pub fn write_to_slice(&self, mut slice: &mut [u8]) -> Result<(), Error> {
+    pub fn write_to_slice(&self, mut slice: &mut [u8]) -> io::Result<()> {
         slice.write_u32::<NetworkEndian>(self.magic)?;
         slice.write_i32::<NetworkEndian>(self.error)?;
         slice.write_u64::<NetworkEndian>(self.handle)?;

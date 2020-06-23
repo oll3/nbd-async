@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::io::{Error, ErrorKind};
+use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 use nix::{errno::Errno, libc::ioctl, request_code_none};
@@ -21,7 +21,7 @@ const SEND_WRITE_ZEROES: u64 = 1 << 6;
 // Multiple connections are okay
 const CAN_MULTI_CONN: u64 = 1 << 8;
 
-pub fn set_sock<F>(f: &F, sock: RawFd) -> Result<i32, Error>
+pub fn set_sock<F>(f: &F, sock: RawFd) -> io::Result<i32>
 where
     F: AsRawFd,
 {
@@ -29,7 +29,7 @@ where
         .map_err(errno_to_io)
 }
 
-pub fn set_block_size<F>(f: &F, size: u32) -> Result<i32, Error>
+pub fn set_block_size<F>(f: &F, size: u32) -> io::Result<i32>
 where
     F: AsRawFd,
 {
@@ -37,28 +37,28 @@ where
         .map_err(errno_to_io)
 }
 
-pub fn do_it<F>(f: &F) -> Result<i32, Error>
+pub fn do_it<F>(f: &F) -> io::Result<i32>
 where
     F: AsRawFd,
 {
     Errno::result(unsafe { ioctl(f.as_raw_fd(), request_code_none!(0xab, 3)) }).map_err(errno_to_io)
 }
 
-pub fn clear_sock<F>(f: &F) -> Result<i32, Error>
+pub fn clear_sock<F>(f: &F) -> io::Result<i32>
 where
     F: AsRawFd,
 {
     Errno::result(unsafe { ioctl(f.as_raw_fd(), request_code_none!(0xab, 4)) }).map_err(errno_to_io)
 }
 
-pub fn clear_queue<F>(f: &F) -> Result<i32, Error>
+pub fn clear_queue<F>(f: &F) -> io::Result<i32>
 where
     F: AsRawFd,
 {
     Errno::result(unsafe { ioctl(f.as_raw_fd(), request_code_none!(0xab, 5)) }).map_err(errno_to_io)
 }
 
-pub fn set_size_blocks<F>(f: &F, size: u64) -> Result<i32, Error>
+pub fn set_size_blocks<F>(f: &F, size: u64) -> io::Result<i32>
 where
     F: AsRawFd,
 {
@@ -66,14 +66,14 @@ where
         .map_err(errno_to_io)
 }
 
-pub fn disconnect<F>(f: &F) -> Result<i32, Error>
+pub fn disconnect<F>(f: &F) -> io::Result<i32>
 where
     F: AsRawFd,
 {
     Errno::result(unsafe { ioctl(f.as_raw_fd(), request_code_none!(0xab, 8)) }).map_err(errno_to_io)
 }
 
-pub fn set_timeout<F>(f: &F, timeout: u64) -> Result<i32, Error>
+pub fn set_timeout<F>(f: &F, timeout: u64) -> io::Result<i32>
 where
     F: AsRawFd,
 {
@@ -81,7 +81,7 @@ where
         .map_err(errno_to_io)
 }
 
-pub fn set_flags<F>(f: &F, flags: u64) -> Result<i32, Error>
+pub fn set_flags<F>(f: &F, flags: u64) -> io::Result<i32>
 where
     F: AsRawFd,
 {
@@ -89,11 +89,11 @@ where
         .map_err(errno_to_io)
 }
 
-fn errno_to_io(error: nix::Error) -> Error {
+fn errno_to_io(error: nix::Error) -> io::Error {
     match error {
-        nix::Error::Sys(errno) => Error::from_raw_os_error(errno as i32),
-        nix::Error::InvalidPath => Error::from(ErrorKind::InvalidInput),
-        nix::Error::InvalidUtf8 => Error::from(ErrorKind::InvalidData),
-        nix::Error::UnsupportedOperation => Error::new(ErrorKind::Other, "not supported"),
+        nix::Error::Sys(errno) => io::Error::from_raw_os_error(errno as i32),
+        nix::Error::InvalidPath => io::Error::from(io::ErrorKind::InvalidInput),
+        nix::Error::InvalidUtf8 => io::Error::from(io::ErrorKind::InvalidData),
+        nix::Error::UnsupportedOperation => io::Error::new(io::ErrorKind::Other, "not supported"),
     }
 }
