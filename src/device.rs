@@ -11,7 +11,7 @@ use tokio::{fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWriteExt,
 use crate::{nbd, sys};
 
 /// A block device.
-#[async_trait]
+#[async_trait(?Send)]
 pub trait BlockDevice {
     /// Read a block from offset.
     async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
