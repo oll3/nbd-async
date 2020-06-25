@@ -19,3 +19,6 @@ tokio = { version = "0.2", features = ["fs", "uds"] }
 
 [dev-dependencies]
 tokio = { version = "0.2", features = ["fs", "uds", "macros"] }
+
+[profile.release.build-override]
+opt-level = 0
