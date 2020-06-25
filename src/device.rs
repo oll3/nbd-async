@@ -16,7 +16,9 @@ pub trait BlockDevice {
     /// Read a block from offset.
     async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
     /// Write a block of data at offset.
-    async fn write(&mut self, offset: u64, buf: &[u8]) -> io::Result<()>;
+    async fn write(&mut self, _offset: u64, _buf: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
     /// Size of a block on device.
     fn block_size(&self) -> u32;
     /// Number of blocks on device.
