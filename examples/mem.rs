@@ -16,7 +16,7 @@ impl MemDev {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl BlockDevice for MemDev {
     async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), std::io::Error> {
         let offset = offset as usize;
