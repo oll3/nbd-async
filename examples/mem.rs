@@ -28,17 +28,13 @@ impl BlockDevice for MemDev {
         self.data[offset..offset + buf.len()].copy_from_slice(buf);
         Ok(())
     }
-    fn block_size(&self) -> u32 {
-        self.block_size
-    }
-    fn block_count(&self) -> u64 {
-        self.num_blocks as u64
-    }
 }
 
 #[tokio::main]
 async fn main() {
     let nbd_path = std::env::args().nth(1).expect("NDB device path");
     let dev = MemDev::new(512, 128);
-    nbd_async::attach_device(nbd_path, dev).await.unwrap();
+    nbd_async::serve_local_nbd(nbd_path, dev.block_size, dev.num_blocks as u64, dev)
+        .await
+        .unwrap();
 }
