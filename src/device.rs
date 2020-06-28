@@ -6,7 +6,10 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::thread::JoinHandle;
-use tokio::{fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWriteExt, net::UnixStream};
+use tokio::{
+    fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWrite, io::AsyncWriteExt,
+    net::UnixStream,
+};
 
 use crate::{nbd, sys};
 
@@ -19,24 +22,32 @@ pub trait BlockDevice {
     async fn write(&mut self, _offset: u64, _buf: &[u8]) -> io::Result<()> {
         Err(io::ErrorKind::InvalidInput.into())
     }
-    /// Size of a block on device.
-    fn block_size(&self) -> u32;
-    /// Number of blocks on device.
-    fn block_count(&self) -> u64;
 }
 
-struct RequestStream {
-    sock: Option<UnixStream>,
+pub struct Server {
     do_it_thread: Option<JoinHandle<io::Result<()>>>,
-    read_buf: [u8; nbd::SIZE_OF_REQUEST],
     file: tokio::fs::File,
 }
 
-/// Attach a block device to a NBD dev file.
-pub async fn attach_device<P, B>(path: P, mut block_device: B) -> io::Result<()>
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = sys::disconnect(&self.file);
+        if let Some(do_it_thread) = self.do_it_thread.take() {
+            do_it_thread.join().expect("join thread").unwrap();
+        }
+    }
+}
+
+/// Attach a socket to a NBD device file.
+pub async fn attach_device<P, S>(
+    path: P,
+    socket: S,
+    block_size: u32,
+    block_count: u64,
+) -> io::Result<Server>
 where
     P: AsRef<Path>,
-    B: Unpin + BlockDevice,
+    S: AsRawFd + Send + 'static,
 {
     let file = OpenOptions::new()
         .read(true)
@@ -44,15 +55,14 @@ where
         .open(path.as_ref())
         .await?;
 
-    let (sock, kernel_sock) = UnixStream::pair()?;
-    sys::set_block_size(&file, block_device.block_size())?;
-    sys::set_size_blocks(&file, block_device.block_count())?;
+    sys::set_block_size(&file, block_size)?;
+    sys::set_size_blocks(&file, block_count)?;
     sys::set_timeout(&file, 10)?;
     sys::clear_sock(&file)?;
 
     let inner_file = file.try_clone().await?;
     let do_it_thread = Some(std::thread::spawn(move || -> io::Result<()> {
-        sys::set_sock(&inner_file, kernel_sock.as_raw_fd())?;
+        sys::set_sock(&inner_file, socket.as_raw_fd())?;
         let _ = sys::set_flags(&inner_file, 0);
         // The do_it ioctl will block until device is disconnected, hence
         // the separate thread.
@@ -61,19 +71,47 @@ where
         let _ = sys::clear_queue(&inner_file);
         Ok(())
     }));
+    Ok(Server { do_it_thread, file })
+}
 
+/// Serve a local block device through a NBD dev file.
+pub async fn serve_local_nbd<P, B>(
+    path: P,
+    block_size: u32,
+    block_count: u64,
+    block_device: B,
+) -> io::Result<()>
+where
+    P: AsRef<Path>,
+    B: Unpin + BlockDevice,
+{
+    let (sock, kernel_sock) = UnixStream::pair()?;
+    let _server = attach_device(path, kernel_sock, block_size, block_count).await?;
+    serve_nbd(block_device, sock).await?;
+    Ok(())
+}
+
+struct RequestStream<C> {
+    client: Option<C>,
+    read_buf: [u8; nbd::SIZE_OF_REQUEST],
+}
+
+/// Serve a block device using a read/write client.
+pub async fn serve_nbd<B, C>(mut block_device: B, client: C) -> io::Result<()>
+where
+    B: Unpin + BlockDevice,
+    C: AsyncRead + AsyncWrite + Unpin,
+{
     let mut stream = RequestStream {
-        sock: Some(sock),
-        do_it_thread,
+        client: Some(client),
         read_buf: [0; nbd::SIZE_OF_REQUEST],
-        file,
     };
 
     let mut reply_buf = vec![];
     let mut write_buf = vec![];
     while let Some(result) = stream.next().await {
         let request = result?;
-        let sock = match stream.sock {
+        let request_handler = match stream.client {
             Some(ref mut sock) => sock,
             None => break,
         };
@@ -95,7 +133,7 @@ where
             }
             nbd::Command::Write => {
                 write_buf.resize(request.len, 0);
-                sock.read_exact(&mut write_buf).await?;
+                request_handler.read_exact(&mut write_buf).await?;
                 if let Err(err) = block_device.write(request.from, &write_buf[..]).await {
                     reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
                 }
@@ -108,30 +146,23 @@ where
             nbd::Command::Trim => unimplemented!(),
             nbd::Command::WriteZeroes => unimplemented!(),
         }
-        sock.write_all(&reply_buf).await?;
+        request_handler.write_all(&reply_buf).await?;
         reply_buf.clear();
     }
     Ok(())
 }
 
-impl Drop for RequestStream {
-    fn drop(&mut self) {
-        let _ = sys::disconnect(&self.file);
-        self.sock = None;
-        if let Some(do_it_thread) = self.do_it_thread.take() {
-            do_it_thread.join().expect("join thread").unwrap();
-        }
-    }
-}
-
-impl RequestStream {
+impl<C> RequestStream<C>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+{
     fn read_next(&mut self, cx: &mut Context) -> Poll<Option<io::Result<nbd::Request>>> {
-        let sock = match self.sock {
-            Some(ref mut sock) => sock,
+        let client = match self.client {
+            Some(ref mut client) => client,
             None => return Poll::Ready(None),
         };
         let read_buf = &mut self.read_buf;
-        let rc = Pin::new(sock).poll_read(cx, read_buf);
+        let rc = Pin::new(client).poll_read(cx, read_buf);
         match rc {
             Poll::Ready(Ok(0)) => return Poll::Ready(None),
             Poll::Ready(Ok(n)) if n != nbd::SIZE_OF_REQUEST => {
@@ -150,7 +181,10 @@ impl RequestStream {
     }
 }
 
-impl Stream for RequestStream {
+impl<C> Stream for RequestStream<C>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+{
     type Item = io::Result<nbd::Request>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.read_next(cx)
