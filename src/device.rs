@@ -44,6 +44,7 @@ pub async fn attach_device<P, S>(
     socket: S,
     block_size: u32,
     block_count: u64,
+    read_only: bool,
 ) -> io::Result<Server>
 where
     P: AsRef<Path>,
@@ -63,7 +64,11 @@ where
     let inner_file = file.try_clone().await?;
     let do_it_thread = Some(std::thread::spawn(move || -> io::Result<()> {
         sys::set_sock(&inner_file, socket.as_raw_fd())?;
-        let _ = sys::set_flags(&inner_file, 0);
+        if read_only {
+            sys::set_flags(&inner_file, sys::HAS_FLAGS | sys::READ_ONLY)?;
+        } else {
+            sys::set_flags(&inner_file, 0)?;
+        }
         // The do_it ioctl will block until device is disconnected, hence
         // the separate thread.
         sys::do_it(&inner_file)?;
@@ -79,6 +84,7 @@ pub async fn serve_local_nbd<P, B>(
     path: P,
     block_size: u32,
     block_count: u64,
+    read_only: bool,
     block_device: B,
 ) -> io::Result<()>
 where
@@ -86,7 +92,7 @@ where
     B: Unpin + BlockDevice,
 {
     let (sock, kernel_sock) = UnixStream::pair()?;
-    let _server = attach_device(path, kernel_sock, block_size, block_count).await?;
+    let _server = attach_device(path, kernel_sock, block_size, block_count, read_only).await?;
     serve_nbd(block_device, sock).await?;
     Ok(())
 }

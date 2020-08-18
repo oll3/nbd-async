@@ -34,7 +34,7 @@ impl BlockDevice for MemDev {
 async fn main() {
     let nbd_path = std::env::args().nth(1).expect("NDB device path");
     let dev = MemDev::new(512, 128);
-    nbd_async::serve_local_nbd(nbd_path, dev.block_size, dev.num_blocks as u64, dev)
+    nbd_async::serve_local_nbd(nbd_path, dev.block_size, dev.num_blocks as u64, false, dev)
         .await
         .unwrap();
 }
