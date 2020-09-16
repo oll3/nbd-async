@@ -1,6 +1,6 @@
 [package]
 name = "nbd-async"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Olle Sandberg <olle@b3rg.se>"]
 license = "MIT"
 readme = "README.md"
