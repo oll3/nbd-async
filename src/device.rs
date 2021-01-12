@@ -8,7 +8,7 @@ use std::path::Path;
 use std::thread::JoinHandle;
 use tokio::{
     fs::OpenOptions, io::AsyncRead, io::AsyncReadExt, io::AsyncWrite, io::AsyncWriteExt,
-    net::UnixStream,
+    io::ReadBuf, net::UnixStream,
 };
 
 use crate::{nbd, sys};
@@ -167,14 +167,17 @@ where
             Some(ref mut client) => client,
             None => return Poll::Ready(None),
         };
-        let read_buf = &mut self.read_buf;
-        let rc = Pin::new(client).poll_read(cx, read_buf);
+        let mut read_buf = ReadBuf::new(&mut self.read_buf);
+        let rc = Pin::new(client).poll_read(cx, &mut read_buf);
         match rc {
-            Poll::Ready(Ok(0)) => return Poll::Ready(None),
-            Poll::Ready(Ok(n)) if n != nbd::SIZE_OF_REQUEST => {
+            Poll::Ready(Ok(())) => {
+              if read_buf.filled().is_empty() {
+                return Poll::Ready(None);
+              }
+              if read_buf.filled().len() != nbd::SIZE_OF_REQUEST {
                 return Poll::Ready(Some(Err(io::Error::from(io::ErrorKind::UnexpectedEof))));
+              }
             }
-            Poll::Ready(Ok(n)) => n,
             Poll::Ready(Err(err)) => return Poll::Ready(Some(Err(err))),
             Poll::Pending => {
                 return Poll::Pending;
