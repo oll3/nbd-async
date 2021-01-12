@@ -22,6 +22,14 @@ pub trait BlockDevice {
     async fn write(&mut self, _offset: u64, _buf: &[u8]) -> io::Result<()> {
         Err(io::ErrorKind::InvalidInput.into())
     }
+    /// Flushes write buffers to the underlying storage medium
+    async fn flush(&mut self) -> io::Result<()> {
+      Ok(())
+    }
+    /// Marks blocks as unused
+    async fn trim(&mut self, _offset: u64, _size: usize) -> io::Result<()> {
+      Ok(())
+    }
 }
 
 pub struct Server {
@@ -146,10 +154,18 @@ where
                 reply.append_to_vec(&mut reply_buf)?;
             }
             nbd::Command::Flush => {
+                if let Err(err) = block_device.flush().await {
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                }
                 reply.append_to_vec(&mut reply_buf)?;
             }
             nbd::Command::Disc => unimplemented!(),
-            nbd::Command::Trim => unimplemented!(),
+            nbd::Command::Trim => {
+                if let Err(err) = block_device.trim(request.from, request.len).await {
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                }
+                reply.append_to_vec(&mut reply_buf)?;
+            }
             nbd::Command::WriteZeroes => unimplemented!(),
         }
         request_handler.write_all(&reply_buf).await?;
