@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use futures::stream::{Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;

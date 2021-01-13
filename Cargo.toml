@@ -13,9 +13,9 @@ categories = ["filesystem", "asynchronous", "os", "network-programming"]
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.4"
-futures = "0.3"
+futures-util = { version = "0.3", default-features = false }
 nix = "0.19"
-tokio = { version = "1.0", features = ["io-util", "fs", "net"] }
+tokio = { version = "1.0" }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["io-util", "fs", "net", "rt-multi-thread", "rt", "macros"] }
