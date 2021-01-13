@@ -24,11 +24,11 @@ pub trait BlockDevice {
     }
     /// Flushes write buffers to the underlying storage medium
     async fn flush(&mut self) -> io::Result<()> {
-      Ok(())
+        Ok(())
     }
     /// Marks blocks as unused
     async fn trim(&mut self, _offset: u64, _size: usize) -> io::Result<()> {
-      Ok(())
+        Ok(())
     }
 }
 
@@ -187,12 +187,12 @@ where
         let rc = Pin::new(client).poll_read(cx, &mut read_buf);
         match rc {
             Poll::Ready(Ok(())) => {
-              if read_buf.filled().is_empty() {
-                return Poll::Ready(None);
-              }
-              if read_buf.filled().len() != nbd::SIZE_OF_REQUEST {
-                return Poll::Ready(Some(Err(io::Error::from(io::ErrorKind::UnexpectedEof))));
-              }
+                if read_buf.filled().is_empty() {
+                    return Poll::Ready(None);
+                }
+                if read_buf.filled().len() != nbd::SIZE_OF_REQUEST {
+                    return Poll::Ready(Some(Err(io::Error::from(io::ErrorKind::UnexpectedEof))));
+                }
             }
             Poll::Ready(Err(err)) => return Poll::Ready(Some(Err(err))),
             Poll::Pending => {
