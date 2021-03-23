@@ -132,18 +132,14 @@ where
         let mut reply = nbd::Reply::from_request(&request);
         match request.command {
             nbd::Command::Read => {
-                let start_offs = reply_buf.len();
-                reply_buf.resize(start_offs + nbd::SIZE_OF_REPLY + request.len, 0);
+                reply_buf.resize(nbd::SIZE_OF_REPLY + request.len, 0);
                 if let Err(err) = block_device
-                    .read(
-                        request.from,
-                        &mut reply_buf[start_offs + nbd::SIZE_OF_REPLY..],
-                    )
+                    .read(request.from, &mut reply_buf[nbd::SIZE_OF_REPLY..])
                     .await
                 {
                     reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
                 }
-                reply.write_to_slice(&mut reply_buf[start_offs..])?;
+                reply.write_to_slice(&mut reply_buf[..])?;
             }
             nbd::Command::Write => {
                 write_buf.resize(request.len, 0);
@@ -159,13 +155,13 @@ where
                 }
                 reply.append_to_vec(&mut reply_buf)?;
             }
-            nbd::Command::Disc => unimplemented!(),
             nbd::Command::Trim => {
                 if let Err(err) = block_device.trim(request.from, request.len).await {
                     reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
                 }
                 reply.append_to_vec(&mut reply_buf)?;
             }
+            nbd::Command::Disc => unimplemented!(),
             nbd::Command::WriteZeroes => unimplemented!(),
         }
         request_handler.write_all(&reply_buf).await?;
