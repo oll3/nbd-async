@@ -137,7 +137,9 @@ where
                     .read(request.from, &mut reply_buf[nbd::SIZE_OF_REPLY..])
                     .await
                 {
+                    // On error we shall reply with error code but no payload.
                     reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                    reply_buf.resize(nbd::SIZE_OF_REPLY, 0);
                 }
                 reply.write_to_slice(&mut reply_buf[..])?;
             }
