@@ -18,14 +18,15 @@ pub enum Command {
     WriteZeroes,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct RequestFlags {
-    // Force Unit Access
-    fua: bool,
-    no_hole: bool,
+    /// Force Unit Access flag.
+    pub fua: bool,
+    /// No Hole flag.
+    pub no_hole: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Request {
     pub magic: u32,
     pub command: Command,
@@ -53,7 +54,12 @@ impl Request {
             3 => Command::Flush,
             4 => Command::Trim,
             5 => Command::WriteZeroes,
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid command")),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid command",
+                ))
+            }
         };
         let flags = type_f >> 16;
         let fua = flags & 1 == 1;
