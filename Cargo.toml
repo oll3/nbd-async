@@ -14,7 +14,7 @@ categories = ["filesystem", "asynchronous", "os", "network-programming"]
 async-trait = "0.1"
 byteorder = "1.4"
 futures-util = { version = "0.3", default-features = false }
-nix = "0.22"
+nix = "0.23"
 tokio = { version = "1" }
 
 [dev-dependencies]
