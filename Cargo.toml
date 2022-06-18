@@ -6,7 +6,7 @@ license = "MIT"
 readme = "README.md"
 description = "Block device drivers in userspace."
 repository = "https://github.com/oll3/nbd-async"
-edition = "2018"
+edition = "2021"
 keywords = ["nbd", "block-device", "userspace"]
 categories = ["filesystem", "asynchronous", "os", "network-programming"]
 
