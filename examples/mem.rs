@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use nbd_async::BlockDevice;
+use nbd_async::{BlockDevice, NoControl};
 
 struct MemDev {
     data: Vec<u8>,
@@ -34,7 +34,14 @@ impl BlockDevice for MemDev {
 async fn main() {
     let nbd_path = std::env::args().nth(1).expect("NDB device path");
     let dev = MemDev::new(512, 128);
-    nbd_async::serve_local_nbd(nbd_path, dev.block_size, dev.num_blocks as u64, false, dev)
-        .await
-        .unwrap();
+    nbd_async::serve_local_nbd(
+        nbd_path,
+        dev.block_size,
+        dev.num_blocks as u64,
+        false,
+        dev,
+        NoControl,
+    )
+    .await
+    .unwrap();
 }
