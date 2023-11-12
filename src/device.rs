@@ -11,11 +11,30 @@ use tokio::{
     io::ReadBuf, net::UnixStream,
 };
 
+use crate::nbd::Request;
 use crate::{nbd, sys};
+
+/// possible control message to device
+#[derive(Debug, Copy, Clone)]
+pub enum Control<T> {
+    Notify(T),
+    Shutdown,
+}
+
+/// use as a control stream if your nbd device does not require
+/// control
+pub struct NoControl;
+
+impl Stream for NoControl {
+    type Item = Control<()>;
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Pending
+    }
+}
 
 /// A block device.
 #[async_trait(?Send)]
-pub trait BlockDevice {
+pub trait BlockDevice<N = ()> {
     /// Read a block from offset.
     async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
     /// Write a block of data at offset.
@@ -28,6 +47,11 @@ pub trait BlockDevice {
     }
     /// Marks blocks as unused
     async fn trim(&mut self, _offset: u64, _size: usize) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// called if a new control message is available on control stream
+    async fn control(&mut self, _control: &Control<N>) -> io::Result<()> {
         Ok(())
     }
 }
@@ -88,21 +112,22 @@ where
 }
 
 /// Serve a local block device through a NBD dev file.
-pub async fn serve_local_nbd<P, B>(
+pub async fn serve_local_nbd<P, B, CT, N>(
     path: P,
     block_size: u32,
     block_count: u64,
     read_only: bool,
     block_device: B,
-) -> io::Result<()>
+    control: CT,
+) -> io::Result<B>
 where
     P: AsRef<Path>,
-    B: Unpin + BlockDevice,
+    B: Unpin + BlockDevice<N>,
+    CT: Stream<Item = Control<N>> + Unpin,
 {
     let (sock, kernel_sock) = UnixStream::pair()?;
     let _server = attach_device(path, kernel_sock, block_size, block_count, read_only).await?;
-    serve_nbd(block_device, sock).await?;
-    Ok(())
+    serve_nbd(block_device, sock, control).await
 }
 
 struct RequestStream<C> {
@@ -111,10 +136,19 @@ struct RequestStream<C> {
 }
 
 /// Serve a block device using a read/write client.
-pub async fn serve_nbd<B, C>(mut block_device: B, client: C) -> io::Result<()>
+/// the wake_up duration defines how often the wake_up method of the block device
+/// is called when it's not handling any actual nbd requests.
+/// in other words, if the device is ideal for this wake_up duration the wake_up method
+/// is called
+pub async fn serve_nbd<B, C, CT, N>(
+    mut block_device: B,
+    client: C,
+    mut control: CT,
+) -> io::Result<B>
 where
-    B: Unpin + BlockDevice,
+    B: Unpin + BlockDevice<N>,
     C: AsyncRead + AsyncWrite + Unpin,
+    CT: Stream<Item = Control<N>> + Unpin,
 {
     let mut stream = RequestStream {
         client: Some(client),
@@ -123,52 +157,89 @@ where
 
     let mut reply_buf = vec![];
     let mut write_buf = vec![];
-    while let Some(result) = stream.next().await {
-        let request = result?;
-        let request_handler = match stream.client {
-            Some(ref mut sock) => sock,
-            None => break,
-        };
-        let mut reply = nbd::Reply::from_request(&request);
-        match request.command {
-            nbd::Command::Read => {
-                reply_buf.resize(nbd::SIZE_OF_REPLY + request.len, 0);
-                if let Err(err) = block_device
-                    .read(request.from, &mut reply_buf[nbd::SIZE_OF_REPLY..])
-                    .await
-                {
-                    // On error we shall reply with error code but no payload.
-                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
-                    reply_buf.resize(nbd::SIZE_OF_REPLY, 0);
+    loop {
+        tokio::select! {
+            result = stream.next() => {
+                let result = match result {
+                    Some(result) => result,
+                    None => break,
+                };
+
+                let request = result?;
+                let request_handler = stream.client.as_mut().unwrap();
+
+                serve_nbd_request(
+                    &mut block_device,
+                    request_handler,
+                    request,
+                    &mut reply_buf,
+                    &mut write_buf,
+                )
+                .await?;
+            },
+            control = control.next() => {
+                let msg = control.unwrap_or(Control::Shutdown);
+                block_device.control(&msg).await?;
+                if let Control::Shutdown = msg {
+                    return Ok(block_device)
                 }
-                reply.write_to_slice(&mut reply_buf[..])?;
             }
-            nbd::Command::Write => {
-                write_buf.resize(request.len, 0);
-                request_handler.read_exact(&mut write_buf).await?;
-                if let Err(err) = block_device.write(request.from, &write_buf[..]).await {
-                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
-                }
-                reply.append_to_vec(&mut reply_buf)?;
-            }
-            nbd::Command::Flush => {
-                if let Err(err) = block_device.flush().await {
-                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
-                }
-                reply.append_to_vec(&mut reply_buf)?;
-            }
-            nbd::Command::Trim => {
-                if let Err(err) = block_device.trim(request.from, request.len).await {
-                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
-                }
-                reply.append_to_vec(&mut reply_buf)?;
-            }
-            nbd::Command::Disc => unimplemented!(),
-            nbd::Command::WriteZeroes => unimplemented!(),
         }
-        request_handler.write_all(&reply_buf).await?;
-        reply_buf.clear();
     }
+    Ok(block_device)
+}
+
+async fn serve_nbd_request<B, C, N>(
+    block_device: &mut B,
+    request_handler: &mut C,
+    request: Request,
+    reply_buf: &mut Vec<u8>,
+    write_buf: &mut Vec<u8>,
+) -> io::Result<()>
+where
+    B: Unpin + BlockDevice<N>,
+    C: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut reply = nbd::Reply::from_request(&request);
+    match request.command {
+        nbd::Command::Read => {
+            reply_buf.resize(nbd::SIZE_OF_REPLY + request.len, 0);
+            if let Err(err) = block_device
+                .read(request.from, &mut reply_buf[nbd::SIZE_OF_REPLY..])
+                .await
+            {
+                // On error we shall reply with error code but no payload.
+                reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                reply_buf.resize(nbd::SIZE_OF_REPLY, 0);
+            }
+            reply.write_to_slice(&mut reply_buf[..])?;
+        }
+        nbd::Command::Write => {
+            write_buf.resize(request.len, 0);
+            request_handler.read_exact(write_buf).await?;
+            if let Err(err) = block_device.write(request.from, &write_buf[..]).await {
+                reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+            }
+            reply.append_to_vec(reply_buf)?;
+        }
+        nbd::Command::Flush => {
+            if let Err(err) = block_device.flush().await {
+                reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+            }
+            reply.append_to_vec(reply_buf)?;
+        }
+        nbd::Command::Trim => {
+            if let Err(err) = block_device.trim(request.from, request.len).await {
+                reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+            }
+            reply.append_to_vec(reply_buf)?;
+        }
+        nbd::Command::Disc => unimplemented!(),
+        nbd::Command::WriteZeroes => unimplemented!(),
+    }
+    request_handler.write_all(reply_buf).await?;
+    reply_buf.clear();
+
     Ok(())
 }
 
