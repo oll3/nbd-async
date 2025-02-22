@@ -32,6 +32,25 @@ pub trait BlockDevice {
     }
 }
 
+/// A block device that supports `Send`.
+#[async_trait]
+pub trait BlockDeviceSend: Send {
+    /// Read a block from offset.
+    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
+    /// Write a block of data at offset.
+    async fn write(&mut self, _offset: u64, _buf: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::InvalidInput.into())
+    }
+    /// Flushes write buffers to the underlying storage medium
+    async fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    /// Marks blocks as unused
+    async fn trim(&mut self, _offset: u64, _size: usize) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 pub struct Server {
     do_it_thread: Option<JoinHandle<io::Result<()>>>,
     file: tokio::fs::File,
@@ -87,7 +106,7 @@ where
     Ok(Server { do_it_thread, file })
 }
 
-/// Serve a local block device through a NBD dev file.
+/// Serve a local block device that doesn't support `Send` through a NBD dev file.
 pub async fn serve_local_nbd<P, B>(
     path: P,
     block_size: u32,
@@ -105,6 +124,25 @@ where
     Ok(())
 }
 
+/// Serve a local block device that supports `Send` through a NBD dev file.
+pub async fn serve_local_nbd_send<P, B>(
+    path: P,
+    block_size: u32,
+    block_count: u64,
+    read_only: bool,
+    block_device: B,
+) -> io::Result<()>
+where
+    P: AsRef<Path>,
+    B: Unpin + BlockDeviceSend,
+{
+    let (sock, kernel_sock) = UnixStream::pair()?;
+    let _server = attach_device(path, kernel_sock, block_size, block_count, read_only).await?;
+    serve_nbd_send(block_device, sock).await?;
+    Ok(())
+}
+
+
 struct RequestStream<C> {
     client: Option<C>,
     read_buf: [u8; nbd::SIZE_OF_REQUEST],
@@ -114,6 +152,68 @@ struct RequestStream<C> {
 pub async fn serve_nbd<B, C>(mut block_device: B, client: C) -> io::Result<()>
 where
     B: Unpin + BlockDevice,
+    C: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut stream = RequestStream {
+        client: Some(client),
+        read_buf: [0; nbd::SIZE_OF_REQUEST],
+    };
+
+    let mut reply_buf = vec![];
+    let mut write_buf = vec![];
+    while let Some(result) = stream.next().await {
+        let request = result?;
+        let request_handler = match stream.client {
+            Some(ref mut sock) => sock,
+            None => break,
+        };
+        let mut reply = nbd::Reply::from_request(&request);
+        match request.command {
+            nbd::Command::Read => {
+                reply_buf.resize(nbd::SIZE_OF_REPLY + request.len, 0);
+                if let Err(err) = block_device
+                    .read(request.from, &mut reply_buf[nbd::SIZE_OF_REPLY..])
+                    .await
+                {
+                    // On error we shall reply with error code but no payload.
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                    reply_buf.resize(nbd::SIZE_OF_REPLY, 0);
+                }
+                reply.write_to_slice(&mut reply_buf[..])?;
+            }
+            nbd::Command::Write => {
+                write_buf.resize(request.len, 0);
+                request_handler.read_exact(&mut write_buf).await?;
+                if let Err(err) = block_device.write(request.from, &write_buf[..]).await {
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                }
+                reply.append_to_vec(&mut reply_buf)?;
+            }
+            nbd::Command::Flush => {
+                if let Err(err) = block_device.flush().await {
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                }
+                reply.append_to_vec(&mut reply_buf)?;
+            }
+            nbd::Command::Trim => {
+                if let Err(err) = block_device.trim(request.from, request.len).await {
+                    reply.error = err.raw_os_error().unwrap_or(nix::errno::Errno::EIO as i32);
+                }
+                reply.append_to_vec(&mut reply_buf)?;
+            }
+            nbd::Command::Disc => unimplemented!(),
+            nbd::Command::WriteZeroes => unimplemented!(),
+        }
+        request_handler.write_all(&reply_buf).await?;
+        reply_buf.clear();
+    }
+    Ok(())
+}
+
+/// Serve a block device that supports `Send` using a read/write client.
+pub async fn serve_nbd_send<B, C>(mut block_device: B, client: C) -> io::Result<()>
+where
+    B: Unpin + BlockDeviceSend,
     C: AsyncRead + AsyncWrite + Unpin,
 {
     let mut stream = RequestStream {
