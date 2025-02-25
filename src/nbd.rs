@@ -21,15 +21,19 @@ pub enum Command {
 #[derive(Debug, Clone, Copy)]
 pub struct RequestFlags {
     /// Force Unit Access flag.
+    #[allow(dead_code)]
     pub fua: bool,
     /// No Hole flag.
+    #[allow(dead_code)]
     pub no_hole: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Request {
+    #[allow(dead_code)]
     pub magic: u32,
     pub command: Command,
+    #[allow(dead_code)]
     pub flags: RequestFlags,
     pub handle: u64,
     pub from: u64,
