@@ -142,7 +142,6 @@ where
     Ok(())
 }
 
-
 struct RequestStream<C> {
     client: Option<C>,
     read_buf: [u8; nbd::SIZE_OF_REQUEST],
